@@ -60,12 +60,6 @@ execute_process (
 # a list of plugins needed for every Android, Qt-based app
 set (_android_musthave_plugins
     platforms/android/libqtforandroid.so
-    platforms/libqeglfs.so
-    platforms/libqminimal.so
-    platforms/libqminimalegl.so
-    platforms/libqoffscreen.so
-    generic/libqevdevtabletplugin.so
-    generic/libqevdevtouchplugin.so
 )
 
 # a list of necessary jars
@@ -97,7 +91,8 @@ endfunction ()
 #               [QT_QML_MODULES modules...]
 #               [QT_PLUGINS plugins...]
 #               [QT_GENERATE_LIBS_XML 0|1]
-#               [ASSETS_PREFIX prefix])
+#               [ASSETS_PREFIX prefix]
+#               [QML_PLUGINS targets...])
 #
 # Copies resources, java sources, finds dependencies, installs QML modules,
 # plugins and builds the apk package.
@@ -129,12 +124,16 @@ endfunction ()
 # the assets/ directory. androiddeployqt uses "--Added-by-androiddeployqt--",
 # AndroidApkUtils uses "--Added-by-AndroidApkUtils--" by default.
 #
+# QML_PLUGINS is a list of targets that are QML plugins. In order to include
+# the qmldir file as well, set the QMLDIR_FILE property for each of these
+# targets.
+#
 function (android_deploy_apk target)
     cmake_parse_arguments (
         _arg
         ""
         "ASSETS_PREFIX"
-        "PATHS;RESOURCES;SOURCES;QT_QML_MODULES;QT_PLUGINS;QT_GENERATE_LIBS_XML"
+        "PATHS;RESOURCES;SOURCES;QT_QML_MODULES;QT_PLUGINS;QT_GENERATE_LIBS_XML;QML_PLUGINS"
         ${ARGN}
     )
     
@@ -233,6 +232,46 @@ function (android_deploy_apk target)
     set (assets_prefix "--Added-by-AndroidApkUtils--")
     if (_arg_ASSETS_PREFIX)
         set (assets_prefix ${_arg_ASSETS_PREFIX})
+    endif ()
+    
+    if (_arg_QML_PLUGINS)
+        foreach (p ${_arg_QML_PLUGINS})
+            get_target_property (p_dir ${p} PLUGIN_DIR)
+            get_target_property (p_qmldir ${p} QMLDIR_FILE)
+            get_target_property (p_qmls ${p} QMLS)
+            get_target_property (p_prefix ${p} PLUGIN_PREFIX)
+            
+            cmake_policy (PUSH)
+            cmake_policy (SET CMP0026 OLD)
+            get_target_property (p_location ${p} LOCATION)
+            cmake_policy (POP)
+            
+            list (APPEND qml_plugins ${p})
+            
+            set (qml_plugins_data "${qml_plugins_data}
+                set (${p}_dir ${p_dir})
+                set (${p}_qmldir ${p_qmldir})")
+            
+            if (p_location)
+                set (qml_plugins_data "${qml_plugins_data}
+                    set (${p}_location ${p_location})")
+            endif ()
+            
+            if (p_qmls)
+                set (qml_plugins_data "${qml_plugins_data}
+                    set (${p}_qmls ${p_qmls})")
+            endif()
+            
+            if (p_prefix)
+                set (qml_plugins_data "${qml_plugins_data}
+                    set (${p}_prefix ${p_prefix})")
+            else ()
+                set (qml_plugins_data "${qml_plugins_data}
+                    set (${p}_prefix qml)")
+            endif ()
+            
+            add_dependencies (android_refresh_package ${p})
+        endforeach ()
     endif ()
     
     _android_generate_config(${target})

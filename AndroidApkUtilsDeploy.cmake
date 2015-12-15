@@ -1,40 +1,42 @@
 include (CMakeParseArguments)
 include (${CMAKE_SOURCE_DIR}/AndroidApkUtilsConfig.cmake)
 
+# Find all preinstalled libraries
+# TODO Support other architectures too
+set (android_platform_dir ${ANDROID_NDK}/platforms/android-${ANDROID_NATIVE_API_LEVEL}/arch-arm/usr/lib)
+file (GLOB_RECURSE android_preinstalled
+    RELATIVE ${android_platform_dir}
+    "${android_platform_dir}/*.so"
+)
+
+# TODO Support non-arms
+find_program (readelf_bin
+    NAMES arm-linux-androideabi-readelf arm-linux-androideabi-readelf.exe
+    PATHS ${ANDROID_TOOLCHAIN_ROOT}
+    PATH_SUFFIXES bin
+    CMAKE_FIND_ROOT_PATH_BOTH
+)
+
+if (NOT readelf_bin)
+    message (FATAL_ERROR "Could not find readelf!")
+endif ()
+
+
 # GLobal variables:
 # bundled_in_lib
 # bundled_in_assets
 # qt_libs
 # bundled_libs
 
-# Finds target dependencies using the readelf util.
-function (android_find_target_dependencies output)
-    if (NOT EXISTS ${target_location})
-        message (FATAL_ERROR "Target file: ${target_location} does not exist!")
-    endif ()
 
-    # Find all preinstalled libraries
-    # TODO Support other architectures too
-    set (android_platform_dir ${ANDROID_NDK}/platforms/android-${ANDROID_NATIVE_API_LEVEL}/arch-arm/usr/lib)
-    file (GLOB_RECURSE android_preinstalled
-        RELATIVE ${android_platform_dir}
-        "${android_platform_dir}/*.so"
-    )
-    
-    # TODO Support non-arms
-    find_program (readelf_bin
-        NAMES arm-linux-androideabi-readelf arm-linux-androideabi-readelf.exe
-        PATHS ${ANDROID_TOOLCHAIN_ROOT}
-        PATH_SUFFIXES bin
-        CMAKE_FIND_ROOT_PATH_BOTH
-    )
-    
-    if (NOT readelf_bin)
-        message (FATAL_ERROR "Could not find readelf!")
+# Finds target dependencies using the readelf util.
+function (android_find_target_dependencies target output)
+    if (NOT EXISTS ${target})
+        message (FATAL_ERROR "Target file: ${target} does not exist!")
     endif ()
     
     execute_process(
-        COMMAND ${readelf_bin} ${target_location} -d -W
+        COMMAND ${readelf_bin} ${target} -d -W
         RESULT_VARIABLE readelf_result
         OUTPUT_VARIABLE readelf_output
     )
@@ -63,15 +65,52 @@ function (android_find_target_dependencies output)
     endif ()
 endfunction ()
 
+# Install provided libraries, add them to lists
+function (android_deploy_libs libs qt_libs_output bundled_libs_output)
+    foreach (lib ${libs})
+        find_library (lib_location_${lib} ${lib}
+            PATHS
+                ${ANDROID_NDK}/sources/cxx-stl/gnu-libstdc++/4.9/libs/${ANDROID_ABI}
+                ${qt_libs_dir}
+                ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}
+                ${paths}
+            NO_DEFAULT_PATH
+            NO_CMAKE_ENVIRONMENT_PATH
+            NO_SYSTEM_ENVIRONMENT_PATH
+            NO_CMAKE_SYSTEM_PATH
+        )
+        
+        if (lib_location_${lib})
+            file (COPY ${lib_location_${lib}}
+                DESTINATION ${package_location}/libs/${ANDROID_ABI}
+                NO_SOURCE_PERMISSIONS
+            )
+            
+            string (REGEX
+                REPLACE "^lib(.+)\\.so$"
+                "\\1"
+                lib_name "${lib}"
+            )
+            
+            if (${lib_name} MATCHES "^(Qt5)|(gnustl_shared).*")
+                list (APPEND qt_libs "${lib_name}")
+            else ()
+                list (APPEND bundled_libs "${lib_name}")
+            endif ()
+        else ()
+            message (WARNING "Could not satisfy dependency: ${lib}")
+        endif ()
+    endforeach ()
+    
+    set (${qt_libs_output} ${qt_libs} PARENT_SCOPE)
+    set (${bundled_libs_output} ${bundled_libs} PARENT_SCOPE)
+endfunction ()
+
 # plugin_dir - target directory of the plugin (i.e. "QtQuick/Controls/Styles")
 # plugin_source_dir - source directory of the plugin, absolute path (i.e. "/opt/Qt/5.5/android_armv7")
 # plugin_files - list of files to be deployed (qmldir, .qml, .so), paths relative to plugin_source
 # plugin prefix - where all the files (except libraries) will be deployed; this dir has to be in the QML import paths
 function (android_deploy_qml_plugin plugin_dir plugin_source_dir plugin_files plugin_prefix)
-    if (NOT plugin_dir)
-        message(FATAL_ERROR "No plugin directory specified")
-    endif ()
-    
     foreach (file ${plugin_files})
         if (IS_ABSOLUTE ${file})
             set (file_absolute ${file})
@@ -100,21 +139,34 @@ function (android_deploy_qml_plugin plugin_dir plugin_source_dir plugin_files pl
                 ${f_destination}/${fname_ext}
             )
             
-            list (APPEND bundled_in_lib "<item>${fname_ext}:${plugin_prefix}/${plugin_dir}/${file}</item>")
+            list (APPEND bundled_in_lib "${fname_ext}:${plugin_prefix}/${plugin_dir}/${file}")
+            
+            android_find_target_dependencies (${file_absolute} plugin_deps)
+            android_deploy_libs ("${plugin_deps}" qt_libs bundled_libs)
         else ()
             get_filename_component (file_target_dir ${file} DIRECTORY)
             file (COPY ${file_absolute}
                 DESTINATION ${package_location}/assets/${assets_prefix}/${plugin_prefix}/${plugin_dir}/${file_target_dir}
                 NO_SOURCE_PERMISSIONS
             )
-            list (APPEND bundled_in_assets "<item>${assets_prefix}/${plugin_prefix}/${plugin_dir}/${file}:${plugin_prefix}/${plugin_dir}/${file}</item>")
+            list (APPEND bundled_in_assets "${assets_prefix}/${plugin_prefix}/${plugin_dir}/${file}:${plugin_prefix}/${plugin_dir}/${file}")
         endif ()
     endforeach ()
     
     set (bundled_in_lib ${bundled_in_lib} PARENT_SCOPE)
     set (bundled_in_assets ${bundled_in_assets} PARENT_SCOPE)
+    set (qt_libs ${qt_libs} PARENT_SCOPE)
+    set (bundled_libs ${bundled_libs} PARENT_SCOPE)
 endfunction ()
 
+# Wraps each line with the <item> xml tag
+function (items_wrap_xml list output)
+    foreach (item ${list})
+        list (APPEND _output "<item>${item}</item>")
+    endforeach ()
+    
+    set (${output} ${_output} PARENT_SCOPE)
+endfunction ()
 
 # first, install all user stuff
 message (STATUS "Executing make install")
@@ -127,43 +179,8 @@ endif ()
 
 # second, install dependencies
 message (STATUS "Installing dependencies")
-android_find_target_dependencies(deps)
-foreach (d ${deps})
-    find_library (d_location_${d} ${d}
-        PATHS ${qt_libs_dir} ${paths}
-        NO_DEFAULT_PATH
-        NO_CMAKE_ENVIRONMENT_PATH
-        NO_SYSTEM_ENVIRONMENT_PATH
-        NO_CMAKE_SYSTEM_PATH
-    )
-    
-    if (d_location_${d})
-        file (COPY ${d_location_${d}}
-            DESTINATION ${package_location}/libs/${ANDROID_ABI}
-            NO_SOURCE_PERMISSIONS
-        )
-        
-        string (REGEX
-            REPLACE "^lib(.+)\\.so$"
-            "\\1"
-            libname "${d}"
-        )
-        
-        if (${libname} MATCHES "^Qt5.*")
-            list (APPEND qt_libs "<item>${libname}</item>")
-        else ()
-            list (APPEND bundled_libs "<item>${libname}</item>")
-        endif ()
-    endif ()
-endforeach ()
-
-# gnustl_shared is a must-have, as Qt libraries need it
-message (STATUS "Installing libgnustl_shared.so")
-file (COPY ${ANDROID_NDK}/sources/cxx-stl/gnu-libstdc++/4.9/libs/${ANDROID_ABI}/libgnustl_shared.so
-    DESTINATION ${package_location}/libs/${ANDROID_ABI}
-    NO_SOURCE_PERMISSIONS
-)
-list (INSERT qt_libs 0 "<item>gnustl_shared</item>")
+android_find_target_dependencies (${target_location} deps)
+android_deploy_libs ("${deps}" qt_libs bundled_libs)
 
 # install plugins
 message (STATUS "Installing Qt plugins")
@@ -184,7 +201,7 @@ foreach (p ${qt_plugins})
     get_filename_component (fname ${p} NAME)
     message ("${p} => ${p_ext}")
     file (RENAME ${p_destination}/${fname} ${p_destination}/${p_ext})
-    list (APPEND bundled_in_lib "<item>${p_ext}:${p_location}</item>")
+    list (APPEND bundled_in_lib "${p_ext}:${p_location}")
 endforeach ()
 
 # install QML modules
@@ -214,9 +231,9 @@ foreach (p ${qml_plugins})
         list (APPEND p_files ${${p}_location})
     endif ()
     
-    if (${p}_qmls)
-        foreach (q ${${p}_qmls})
-            list (APPEND p_files ${q})
+    if (${p}_files)
+        foreach (f ${${p}_files})
+            list (APPEND p_files ${f})
         endforeach ()
     endif ()
     
@@ -226,6 +243,14 @@ foreach (p ${qml_plugins})
     unset (p_files)
 endforeach ()
 
+if (qt_libs)
+    list (REMOVE_DUPLICATES qt_libs)
+endif ()
+
+if (bundled_libs)
+    list (REMOVE_DUPLICATES bundled_libs)
+endif ()
+
 # install Qt's jars
 foreach (j ${qt_jars})
     file (COPY ${qt_root}/jar/${j}
@@ -234,9 +259,13 @@ foreach (j ${qt_jars})
 endforeach ()
 
 if (qt_generate_libs_xml)
+    items_wrap_xml ("${qt_libs}" qt_libs)
     string (REPLACE ";" "\n" qt_libs "${qt_libs}")
+    items_wrap_xml ("${bundled_libs}" bundled_libs)
     string (REPLACE ";" "\n" bundled_libs "${bundled_libs}")
+    items_wrap_xml ("${bundled_in_lib}" bundled_in_lib)
     string (REPLACE ";" "\n" bundled_in_lib "${bundled_in_lib}")
+    items_wrap_xml ("${bundled_in_assets}" bundled_in_assets)
     string (REPLACE ";" "\n" bundled_in_assets "${bundled_in_assets}")
     configure_file (${libs_xml_location} ${package_location}/res/values/libs.xml @ONLY)
 endif ()
@@ -246,13 +275,17 @@ endif ()
 # build the actual .apk package
 string (TOLOWER ${CMAKE_PROJECT_NAME} app_name)
 
-if (${CMAKE_BUILD_TYPE} MATCHES Debug)
+if (keystore AND keystore_alias AND keystore_password)
+    set (ant_args "release")
+    set (ant_output_file ${package_location}/bin/${app_name}-release.apk)
+    
+    file (WRITE ${package_location}/ant.properties
+        "key.store=${keystore}\nkey.alias=${keystore_alias}\nkey.store.password=${keystore_password}\nkey.alias.password=${keystore_password}"
+    )
+else ()
     set (ant_args "debug")
     set (ant_output_file ${package_location}/bin/${app_name}-debug.apk)
-elseif (${CMAKE_BUILD_TYPE} MATCHES Release) # TODO support app signing
-    set (ant_args "debug")
-    set (ant_output_file ${package_location}/bin/${app_name}-debug.apk)
-endif (${CMAKE_BUILD_TYPE} MATCHES Debug)
+endif ()
 
 get_filename_component (pkg_fname ${ant_output_file} NAME)
 message (STATUS "Building ${pkg_fname}...")
@@ -264,6 +297,10 @@ execute_process (COMMAND ${ant_bin} ${ant_args}
     RESULT_VARIABLE ant_result
     OUTPUT_FILE ${ant_log_file}
 )
+
+if (EXISTS ${package_location}/ant.properties)
+    file (REMOVE ${package_location}/ant.properties)
+endif ()
 
 if (${ant_result} EQUAL 0)
     file (COPY ${ant_output_file} DESTINATION ${binary_root})

@@ -6,6 +6,7 @@
 # 
 # The following functions are provided by this module:
 # 
+#       android_deploy_apk
 #       android_qt_generate_manifest
 #
 
@@ -96,6 +97,9 @@ endfunction ()
 #
 # Copies resources, java sources, finds dependencies, installs QML modules,
 # plugins and builds the apk package.
+# New targets are added to the build:
+# * apk - builds the apk package;
+# * apk_install - builds the apk package and deploys it to the Android device.
 #
 # This function requries the ANDROID_MANIFEST property of the given target to
 # define the path to the AndroidManifest.xml file.
@@ -238,7 +242,7 @@ function (android_deploy_apk target)
         foreach (p ${_arg_QML_PLUGINS})
             get_target_property (p_dir ${p} PLUGIN_DIR)
             get_target_property (p_qmldir ${p} QMLDIR_FILE)
-            get_target_property (p_qmls ${p} QMLS)
+            get_target_property (p_files ${p} FILES)
             get_target_property (p_prefix ${p} PLUGIN_PREFIX)
             
             cmake_policy (PUSH)
@@ -249,42 +253,50 @@ function (android_deploy_apk target)
             list (APPEND qml_plugins ${p})
             
             set (qml_plugins_data "${qml_plugins_data}
-                set (${p}_dir ${p_dir})
-                set (${p}_qmldir ${p_qmldir})")
+                set (${p}_dir \"${p_dir}\")
+                set (${p}_qmldir \"${p_qmldir}\")")
             
             if (p_location)
                 set (qml_plugins_data "${qml_plugins_data}
-                    set (${p}_location ${p_location})")
+                    set (${p}_location \"${p_location}\")")
             endif ()
             
-            if (p_qmls)
+            if (p_files)
                 set (qml_plugins_data "${qml_plugins_data}
-                    set (${p}_qmls ${p_qmls})")
+                    set (${p}_files \"${p_files}\")")
             endif()
             
             if (p_prefix)
                 set (qml_plugins_data "${qml_plugins_data}
-                    set (${p}_prefix ${p_prefix})")
+                    set (${p}_prefix \"${p_prefix}\")")
             else ()
                 set (qml_plugins_data "${qml_plugins_data}
-                    set (${p}_prefix qml)")
+                    set (${p}_prefix \"qml\")")
             endif ()
             
             add_dependencies (android_refresh_package ${p})
         endforeach ()
     endif ()
     
+    get_target_property (keystore ${target} KEYSTORE)
+    get_target_property (keystore_alias ${target} KEYSTORE_ALIAS)
+    get_target_property (keystore_password ${target} KEYSTORE_PASSWORD)
+    
     _android_generate_config(${target})
     configure_file (${_android_apkutils_dir}/AndroidApkUtilsDeploy.cmake ${CMAKE_CURRENT_BINARY_DIR}/AndroidApkUtilsDeploy.cmake COPYONLY)
     
     add_custom_target (apk
-            ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/AndroidApkUtilsDeploy.cmake
+        ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/AndroidApkUtilsDeploy.cmake
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         DEPENDS build.xml
     )
     
     string (TOLOWER ${CMAKE_PROJECT_NAME} app_name)
-    set (package_file_name ${app_name}-debug.apk) # TODO support app signing
+    if (keystore AND keystore_alias AND keystore_password)
+        set (package_file_name ${app_name}-release.apk)
+    else ()
+        set (package_file_name ${app_name}-debug.apk)
+    endif ()
     
     add_custom_target (apk_install
         DEPENDS apk

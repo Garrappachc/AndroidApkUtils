@@ -1,6 +1,6 @@
 # AndroidApkUtils specific variables
-set (binary_root @CMAKE_BINARY_DIR@)
-set (files_dir @files_dir@)
+set (binary_root "@CMAKE_BINARY_DIR@")
+set (files_dir "@files_dir@")
 set (target_location "@target_location@")
 set (qt_root "@_qt_root@")
 set (qt_libs_dir "@_qt_libs_dir@")
@@ -20,6 +20,10 @@ set (qt_jars @qt_jars@)
 set (qml_plugins @qml_plugins@)
 @qml_plugins_data@
 
+set (keystore @keystore@)
+set (keystore_alias @keystore_alias@)
+set (keystore_password "@keystore_password@")
+
 set (paths "@paths@")
 
 # Android toolchain variables
@@ -35,3 +39,4 @@ set (CMAKE_FIND_LIBRARY_SUFFIXES @CMAKE_FIND_LIBRARY_SUFFIXES@)
 set (CMAKE_FIND_LIBRARY_PREFIXES @CMAKE_FIND_LIBRARY_PREFIXES@)
 set (CMAKE_BUILD_TYPE @CMAKE_BUILD_TYPE@)
 set (CMAKE_PROJECT_NAME @CMAKE_PROJECT_NAME@)
+set (CMAKE_LIBRARY_OUTPUT_DIRECTORY @CMAKE_LIBRARY_OUTPUT_DIRECTORY@)

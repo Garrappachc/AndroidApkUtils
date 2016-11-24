@@ -106,6 +106,33 @@ function (android_deploy_libs libs qt_libs_output bundled_libs_output)
     set (${bundled_libs_output} ${bundled_libs} PARENT_SCOPE)
 endfunction ()
 
+# Deploy a single, custom plugin
+function (android_deploy_plugin plugin)
+    if (NOT IS_ABSOLUTE ${plugin})
+        message (WARNING "${plugin} is not an absolute path; cannot deploy it")
+    else ()
+        file (RELATIVE_PATH p_relative ${CMAKE_LIBRARY_OUTPUT_DIRECTORY} ${plugin})
+        string (REPLACE "/" "_" p_ext "${p_relative}")
+        set (p_ext "lib${p_ext}")
+        
+        set (p_destination ${package_location}/libs/${ANDROID_ABI})
+        file (COPY ${plugin}
+            DESTINATION ${p_destination}
+            NO_SOURCE_PERMISSIONS
+        )
+        
+        get_filename_component (p_name ${plugin} NAME)
+        file (RENAME
+            ${p_destination}/${p_name}
+            ${p_destination}/${p_ext}
+        )
+        
+        list (APPEND bundled_in_lib "${p_ext}:${p_relative}")
+    endif ()
+    
+    set (bundled_in_lib ${bundled_in_lib} PARENT_SCOPE)
+endfunction ()
+
 # plugin_dir - target directory of the plugin (i.e. "QtQuick/Controls/Styles")
 # plugin_source_dir - source directory of the plugin, absolute path (i.e. "/opt/Qt/5.5/android_armv7")
 # plugin_files - list of files to be deployed (qmldir, .qml, .so), paths relative to plugin_source
@@ -123,8 +150,6 @@ function (android_deploy_qml_plugin plugin_dir plugin_source_dir plugin_files pl
             set (fname_ext ${plugin_dir}/${file})
             string (REPLACE "/" "_" fname_ext "${fname_ext}")
             set (fname_ext "lib${fname_ext}")
-            
-            message ("${plugin_dir}/${file} => ${fname_ext}")
             
             set (f_destination ${package_location}/libs/${ANDROID_ABI})
             
@@ -168,6 +193,26 @@ function (items_wrap_xml list output)
     set (${output} ${_output} PARENT_SCOPE)
 endfunction ()
 
+# Enables target for remote debugging
+function (enable_debug)
+     # 1. generate essential Android Makefiles
+    file (MAKE_DIRECTORY ${package_location}/jni)
+    if (NOT EXISTS ${package_location}/jni/Android.mk)
+        file (WRITE ${package_location}/jni/Android.mk "APP_ABI := ${ANDROID_ABI}\n")
+    endif ()
+    
+    if (NOT EXISTS ${package_location}/jni/Application.mk)
+        file (WRITE ${package_location}/jni/Application.mk "APP_ABI := ${ANDROID_ABI}\n")
+    endif ()
+
+    # 2. generate gdb.setup
+    file (WRITE ${package_location}/libs/${ANDROID_ABI}/gdb.setup "set solib-search-path ${package_location}/libs/${ANDROID_ABI}\n")
+    file (APPEND ${package_location}/libs/${ANDROID_ABI}/gdb.setup "directory ${includes}\n")
+
+    # 3. copy gdbserver executable
+    file (COPY ${ANDROID_NDK}/prebuilt/android-${ANDROID_ARCH_NAME}/gdbserver/gdbserver DESTINATION ${package_location}/libs/${ANDROID_ABI})
+endfunction ()
+
 # first, install all user stuff
 message (STATUS "Executing make install")
 if (EXISTS ${binary_root}/cmake_install.cmake)
@@ -199,9 +244,11 @@ foreach (p ${qt_plugins})
     )
     
     get_filename_component (fname ${p} NAME)
-    message ("${p} => ${p_ext}")
     file (RENAME ${p_destination}/${fname} ${p_destination}/${p_ext})
     list (APPEND bundled_in_lib "${p_ext}:${p_location}")
+    
+    android_find_target_dependencies (${p_absolute} plugin_deps)
+    android_deploy_libs ("${plugin_deps}" qt_libs bundled_libs)
 endforeach ()
 
 # install QML modules
@@ -209,7 +256,6 @@ message (STATUS "Installing Qt QML modules")
 foreach (m ${qt_qml_modules})
     set (m_location ${qt_qmls_dir}/${m})
     file (GLOB_RECURSE qml_files RELATIVE ${m_location} ${m_location}/*)
-    #file (GLOB_RECURSE qml_files ${m_location}/*)
     
     foreach (f ${qml_files})
         list (APPEND m_files ${f})
@@ -243,6 +289,14 @@ foreach (p ${qml_plugins})
     unset (p_files)
 endforeach ()
 
+# install custom plugins
+message (STATUS "Installing custom plugins")
+if (plugins)
+    foreach (p ${plugins})
+        android_deploy_plugin (${p})
+    endforeach ()
+endif ()
+
 if (qt_libs)
     list (REMOVE_DUPLICATES qt_libs)
 endif ()
@@ -270,7 +324,10 @@ if (qt_generate_libs_xml)
     configure_file (${libs_xml_location} ${package_location}/res/values/libs.xml @ONLY)
 endif ()
 
-
+# enable remote debugging
+if (CMAKE_BUILD_TYPE MATCHES Debug)
+    enable_debug ()
+endif ()
 
 # build the actual .apk package
 string (TOLOWER ${CMAKE_PROJECT_NAME} app_name)
@@ -303,7 +360,7 @@ if (EXISTS ${package_location}/ant.properties)
 endif ()
 
 if (${ant_result} EQUAL 0)
-    file (COPY ${ant_output_file} DESTINATION ${binary_root})
+    file (COPY ${ant_output_file} DESTINATION ${binary_current})
     message ("${pkg_fname} done.")
 else ()
     message (FATAL_ERROR "Failed building APK package; see ant logs in ${ant_log_file}")

@@ -8,7 +8,7 @@ Deploying apps for Android devices is somehow a pain in the neck. Either we use 
 That is true and there are great CMake scripts that use it, like [qt-android-cmake](https://github.com/LaurentGomila/qt-android-cmake). But `androiddeployqt` is not as flexible as I wish it was. You cannot change the contents of apk package very much, as it adds some hard-coded prefixes and variables, not to mention it deploys much more than you really need, making the app a little bit heavy. Apart from that, `androiddeployqt` is for Qt projects only. This script tries to do everything CMake way.
 
 ### Great, how to use it?
-I am preparing some more extensive documentation for it. As for now, you can read some drafts in the `AndroidApkUtils.cmake` file and refer to [CMakeLists.txt file](https://github.com/Vatsinator/Vatsinator/blob/develop/dist/android/CMakeLists.txt) in my project.
+I am preparing some more extensive documentation for it. As for now, you can read some drafts in the `AndroidApkUtils.cmake` file and refer to [CMakeLists.txt file](https://github.com/Vatsinator/Vatsinator/blob/develop/src/application/quick/CMakeLists.txt) in my project.
 
 ### Contact
 Michał Garapich garrappachc@gmail.com
